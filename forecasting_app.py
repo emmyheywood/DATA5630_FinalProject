@@ -156,7 +156,19 @@ def load_and_process_data(uploaded_file, selected_freq):
     df = df.sort_index()
     df.index = df.index.to_period(selected_freq)
     df = df.loc[df.index.notnull()]
+
+    # Handle missing values in numeric columns
+    numeric_columns = df.select_dtypes(include=[np.number]).columns
+    for column in numeric_columns:
+        if df[column].isnull().any():
+            df = impute_interpolation(df, column)
+            st.info(f"Missing values in '{column}' have been interpolated.")
+
     return df
+
+def impute_interpolation(data, column):
+    data[column] = data[column].interpolate(method='linear')
+    return data
 
 def main():
     st.set_page_config(layout="wide")
