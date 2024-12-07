@@ -18,139 +18,10 @@ def manual_train_test_split(y, train_size):
     split_point = int(len(y) * train_size)
     return y[:split_point], y[split_point:]
 
-def DecisionTree(y_train, y_test, fh, **params):
-    #Prepping the data for decision trees
-    #Creating dataframe for y_train, y_test to allow for lag columns
-    y_train = y_train.to_frame('data_value')
-    y_test = y_test.to_frame('data_value')
-
-    #Creating lag variables for train
-    y_train['Lag_1'] = y_train['data_value'].shift(1)
-    y_train['Lag_2'] = y_train['data_value'].shift(2)
-    y_train['Lag_3'] = y_train['data_value'].shift(3)
-    #Dropping nulls
-    y_train.dropna(inplace=True)
-
-    #Creating lag variables for test
-    y_test['Lag_1'] = y_test['data_value'].shift(1)
-    y_test['Lag_2'] = y_test['data_value'].shift(2)
-    y_test['Lag_3'] = y_test['data_value'].shift(3)
-    #Dropping nulls
-    y_test.dropna(inplace=True)
-
-    X_train = y_train[['Lag_1','Lag_2','Lag_3']]
-    y_train = y_train['data_value']
-
-    X_test = y_test[['Lag_1','Lag_2','Lag_3']]
-    y_test = y_test['data_value']
-
-    
-    dt_model = DecisionTreeRegressor(**params)
-    dt_model.fit(X_train, y_train)
-
-    
-    return dt_model, X_test, y_test, X_train
-
-def random_forest_time_series(data, target_col, n_lags=3, test_size=0.2, n_estimators=100):
-    """
-    Train a Random Forest model for time-series prediction with customizable parameters.
-    
-    Parameters:
-        data (pd.DataFrame): The dataset containing the time-series data.
-        target_col (str): The column name of the target variable.
-        n_lags (int): Number of lagged features to create.
-        test_size (float): Proportion of the data to use for testing (0 to 1).
-        n_estimators (int): Number of trees in the Random Forest.
-
-    Returns:
-        model (RandomForestRegressor): Trained Random Forest model.
-        y_test (pd.Series): True target values for the test set.
-        y_pred (np.ndarray): Predicted target values for the test set.
-    """
-    # Create lagged features
-    for lag in range(1, n_lags + 1):
-        data[f'lag_{lag}'] = data[target_col].shift(lag)
-
-    # Drop rows with NaN values resulting from lagging
-    data = data.dropna()
-
-    # Define predictors and target
-    X = data[[f'lag_{i}' for i in range(1, n_lags + 1)]]
-    y = data[target_col]
-
-    # Train-test split
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, shuffle=False)
-
-    # Train the Random Forest model
-    model = RandomForestRegressor(n_estimators=n_estimators, random_state=42)
-    model.fit(X_train, y_train)
-
-    # Make predictions
-    y_pred = model.predict(X_test)
-
-    return model, y_test, y_pred
-
-def forecast_future(model, data, fh):
-    # Initialize the list of forecasted values
-    forecasted_values = []
-
-    # Start with the last known lag values
-    last_known_lags = data.iloc[-1, -3:].values  # Get the last 3 lags from the data
-
-    for step in range(fh):
-        # Convert the current lags into a DataFrame with appropriate column names
-        current_lags_df = pd.DataFrame([last_known_lags], columns=[f'Lag_{i}' for i in range(1, 4)])
-
-        # Predict the next value using the model
-        next_value = model.predict(current_lags_df)[0]
-
-        # Append the forecasted value
-        forecasted_values.append(next_value)
-
-        # Update the lag values for the next prediction
-        last_known_lags = np.roll(last_known_lags, -1)  # Shift the lag values
-        last_known_lags[-1] = next_value  # Replace the last lag with the predicted value
-
-    return forecasted_values
-
 @st.cache_data
 def run_forecast(y_train, y_test, model, fh, **kwargs):
     if model == 'ETS':
         forecaster = AutoETS(**kwargs)
-    elif model == 'ARIMA':
-        forecaster = AutoARIMA(**kwargs)
-
-    elif model == "Decision Tree":
-        forecaster, X_test, y_test, X_train = DecisionTree(y_train, y_test, fh)
-        #Keeping track of the index
-        test_indices = X_test.index
-        y_pred = forecaster.predict(X_test)
-        #Combining the predicted values with the date index
-        y_pred = pd.DataFrame({
-            'Prediction': y_pred
-        }, index = test_indices)
-        #Getting the forecast
-        last_date = y_test.index[-1]
-        future_dates = pd.period_range(start=last_date + 1, periods=fh, freq=y_train.index.freq)
-        future_horizon = ForecastingHorizon(future_dates, is_relative=False)
-        forecasts = forecast_future(forecaster, X_test,fh)
-        y_forecast = pd.DataFrame({
-                "Forecasts": forecasts
-        }, index=future_dates)
-
-    elif model == "Random Forest":
-        forecaster, y_test, y_pred = random_forest_time_series(
-        data=df_ph_clean,
-        target_col='data_value',
-        n_lags=2,
-        test_size=0.2,
-        n_estimators=150
-        )
-
-    else:
-        raise ValueError("Unsupported model")
-    
-    if model != "Decision Tree":
         forecaster.fit(y_train)
         y_pred = forecaster.predict(fh=ForecastingHorizon(y_test.index, is_relative=False))
         
@@ -158,9 +29,76 @@ def run_forecast(y_train, y_test, model, fh, **kwargs):
         future_dates = pd.period_range(start=last_date + 1, periods=fh, freq=y_train.index.freq)
         future_horizon = ForecastingHorizon(future_dates, is_relative=False)
         y_forecast = forecaster.predict(fh=future_horizon)
+
+    elif model == 'ARIMA':
+        forecaster = AutoARIMA(**kwargs)
+        forecaster.fit(y_train)
+        y_pred = forecaster.predict(fh=ForecastingHorizon(y_test.index, is_relative=False))
+        
+        last_date = y_test.index[-1]
+        future_dates = pd.period_range(start=last_date + 1, periods=fh, freq=y_train.index.freq)
+        future_horizon = ForecastingHorizon(future_dates, is_relative=False)
+        y_forecast = forecaster.predict(fh=future_horizon)
+
+    elif model in ["Decision Tree", "Random Forest"]:
+        # Create DataFrames for the entire series first
+        full_series = pd.concat([y_train, y_test])
+        series_df = full_series.to_frame('data_value')
+        
+        # Create lag features for the entire series
+        n_lags = kwargs.get('n_lags', 3)
+        for i in range(1, n_lags + 1):
+            series_df[f'Lag_{i}'] = series_df['data_value'].shift(i)
+        
+        # Split back into train and test after creating lags
+        train_df = series_df.loc[y_train.index]
+        test_df = series_df.loc[y_test.index]
+        
+        # Drop NaN rows from training data
+        train_df = train_df.dropna()
+        
+        # Prepare features and target for training
+        X_train = train_df[[f'Lag_{i}' for i in range(1, n_lags + 1)]]
+        train_y = train_df['data_value']
+        
+        # Prepare test features
+        X_test = test_df[[f'Lag_{i}' for i in range(1, n_lags + 1)]]
+        
+        # Create and train model
+        if model == "Decision Tree":
+            forecaster = DecisionTreeRegressor(**kwargs)
+        else:  # Random Forest
+            n_estimators = kwargs.get('n_estimators', 100)
+            forecaster = RandomForestRegressor(n_estimators=n_estimators, random_state=42)
+        
+        forecaster.fit(X_train, train_y)
+        
+        # Make predictions for test set
+        y_pred = pd.Series(forecaster.predict(X_test), index=test_df.index)
+        
+        # Generate future predictions
+        last_date = y_test.index[-1]
+        future_dates = pd.period_range(start=last_date + 1, periods=fh, freq=y_train.index.freq)
+        
+        # Prepare data for future forecasts
+        last_known_values = series_df.iloc[-n_lags:]['data_value'].values
+        forecasts = []
+        
+        for _ in range(fh):
+            next_pred = forecaster.predict(last_known_values.reshape(1, -1))[0]
+            forecasts.append(next_pred)
+            last_known_values = np.roll(last_known_values, -1)
+            last_known_values[-1] = next_pred
+            
+        y_forecast = pd.Series(forecasts, index=future_dates)
+
+    else:
+        raise ValueError("Unsupported model")
     
     return forecaster, y_pred, y_forecast
 
+
+@st.cache_data
 def plot_time_series(y_train, y_test, y_pred, y_forecast, title):
     fig, ax = plt.subplots(figsize=(12, 6))
     ax.plot(y_train.index.to_timestamp(), y_train.values, label="Train")
@@ -173,6 +111,7 @@ def plot_time_series(y_train, y_test, y_pred, y_forecast, title):
     plt.ylabel("Value")
     return fig
 
+@st.cache_data
 def plot_model_comparison(models, visible_models, test_data):
     fig, ax = plt.subplots(figsize=(12, 6))
     
@@ -196,6 +135,7 @@ def plot_model_comparison(models, visible_models, test_data):
     plt.ylabel("Value")
     return fig
 
+@st.cache_data
 def calculate_metrics(y_true, y_pred):
     mse = mean_squared_error(y_true, y_pred)
     mae = mean_absolute_error(y_true, y_pred)
@@ -261,12 +201,13 @@ def main():
     </style>
     """, unsafe_allow_html=True)
 
+    
     st.markdown("""
-    <div style='background-color: #4682B4; padding: 50px; margin-bottom: 50px; border-radius: 0px'>
-        <h1 style='color: white; text-align: center; margin: 0; font-family: "Helvetica Neue", Arial, sans-serif; font-weight: 200; font-size: 70px;'>Time Series Forecasting App</h1>
+    <div style='background-color: #4682B4; padding: 30px; margin-bottom: 30px; border-radius: 0px'>
+        <h1 style='color: white; text-align: center; margin: 0; font-family: "Helvetica Neue", Arial, sans-serif; font-weight: 200; font-size: 70px;'>Time Series Forecaster</h1>
     </div>
     """, unsafe_allow_html=True)
-    #st.title("Time Series Forecasting App")
+
 
     tab1, tab2 = st.tabs(["Single Model Forecast", "Model Comparison"])
 
@@ -354,13 +295,17 @@ def main():
                     "min_samples_leaf":min_samples_leaf }
                 
             elif model_choice == "Random Forest":
-
-                n_lags = st.number_input("Lags", min_value=1, value=2) 
-                n_estimators = st.number_input("Number of Trees", min_value = 1, value =150)
-
+                n_lags = st.number_input("Number of Lags", min_value=1, max_value=12, value=3)
+                n_estimators = st.number_input("Number of Trees", min_value=10, max_value=500, value=100)
+                max_depth = st.number_input("Maximum Tree Depth", min_value=1, max_value=50, value=15)
+                min_samples_split = st.number_input("Minimum Samples Split", min_value=2, max_value=20, value=5)
+                
                 model_params = {
                     "n_lags": n_lags,
-                    "n_estimators": n_estimators
+                    "n_estimators": n_estimators,
+                    "max_depth": max_depth,
+                    "min_samples_split": min_samples_split,
+                    "random_state": 42
                 }
 
         with col2:
